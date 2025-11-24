@@ -1,76 +1,80 @@
-name: Update Blacklist Data (Simple)
+name: Update Blacklist Data (Real Filename for Both JSON and IDs)
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # 每天 UTC 00:00 运行
-  workflow_dispatch:
+    # 每天 UTC 00:00 运行（北京时间 08:00）
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # 支持手动触发
 
 jobs:
   update-blacklist:
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
-    
-    - name: Install jq
-      run: sudo apt-get update && sudo apt-get install -y jq
-    
-    - name: Create directory and fetch data
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y jq
+
+    - name: Create target directory
       run: |
         mkdir -p bird-shield-blocking/share/blacklist
-        
-        # 获取重定向后的最终 URL 和数据
-        echo "正在获取数据..."
-        response=$(curl -s -L -w "%{url_effective} %{http_code}" -o temp_response.json "https://basedinchina.com/api/users/all")
-        final_url=$(echo $response | cut -d' ' -f1)
-        http_code=$(echo $response | cut -d' ' -f2)
-        
-        echo "最终 URL: $final_url"
-        echo "HTTP 状态码: $http_code"
-        
-        # 提取用户 IDs
-        if [ "$http_code" = "200" ]; then
-          # 保存原始数据
-          mv temp_response.json bird-shield-blocking/share/blacklist/latest-users.json
-          
-          # 提取 IDs
-          jq -r '.users[].id' bird-shield-blocking/share/blacklist/latest-users.json > bird-shield-blocking/share/blacklist/latest-user-ids.txt
-          
-          # 生成带时间戳的文件
-          timestamp=$(date -u +"%Y%m%d-%H%M%S")
-          cp bird-shield-blocking/share/blacklist/latest-users.json bird-shield-blocking/share/blacklist/users-$timestamp.json
-          cp bird-shield-blocking/share/blacklist/latest-user-ids.txt bird-shield-blocking/share/blacklist/user-ids-$timestamp.txt
-          
-          # 生成元数据
-          cat > bird-shield-blocking/share/blacklist/metadata-$timestamp.json << EOF
-        {
-          "fetchedAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
-          "sourceUrl": "https://basedinchina.com/api/users/all",
-          "finalUrl": "$final_url",
-          "statusCode": $http_code,
-          "userCount": $(jq '.users | length' bird-shield-blocking/share/blacklist/latest-users.json),
-          "fileName": "users-$timestamp.json"
-        }
-        EOF
-          
-          echo "数据更新完成!"
-          echo "用户数量: $(jq '.users | length' bird-shield-blocking/share/blacklist/latest-users.json)"
-        else
-          echo "获取数据失败，HTTP 状态码: $http_code"
+
+    - name: Fetch JSON & extract IDs using real filename
+      run: |
+        # 🔗 数据源 URL（会重定向到真实 JSON 文件）
+        SOURCE_URL="https://basedinchina.com/api/users/all"
+
+        echo "🔗 正在请求数据源: $SOURCE_URL"
+
+        # 使用 curl 跟随重定向，同时获取最终 URL
+        RESPONSE=$(curl -s -L -w "HTTP_STATUS:%{http_code}\nFINAL_URL:%{url_effective}" -o temp.json "$SOURCE_URL")
+
+        # 提取 HTTP 状态码 和 最终 URL
+        HTTP_STATUS=$(echo "$RESPONSE" | sed -n 's/.*HTTP_STATUS:\([0-9]*\).*/\1/p')
+        FINAL_URL=$(echo "$RESPONSE" | sed -n 's/.*FINAL_URL:\(.*\)/\1/p')
+
+        echo "✅ 最终状态码: $HTTP_STATUS"
+        echo "📍 最终下载地址: $FINAL_URL"
+
+        if [ "$HTTP_STATUS" != "200" ]; then
+          echo "❌ 请求失败，HTTP 状态码: $HTTP_STATUS"
           exit 1
         fi
-    
+
+        # 从最终 URL 中提取文件名（如 based-in-china-...2025-11-24T12-58-31-024Z.json）
+        REAL_FILENAME=$(basename "$FINAL_URL")
+        echo "📦 提取到的真实文件名: $REAL_FILENAME"
+
+        # 保存原始 JSON，使用真实文件名
+        TARGET_JSON_PATH="bird-shield-blocking/share/blacklist/$REAL_FILENAME"
+        mv temp.json "$TARGET_JSON_PATH"
+        echo "💾 原始 JSON 已保存为: $TARGET_JSON_PATH"
+
+        # 提取所有用户的 id，并保存为同名但扩展名为 .txt 的文件
+        TXT_FILENAME="${REAL_FILENAME%.*}.txt"  # 把 .json 替换为 .txt
+        TARGET_TXT_PATH="bird-shield-blocking/share/blacklist/$TXT_FILENAME"
+
+        jq -r '.users[].id' "$TARGET_JSON_PATH" > "$TARGET_TXT_PATH"
+        echo "💾 用户 IDs 已提取到: $TARGET_TXT_PATH （每行一个 id）"
+
     - name: Commit and push
       run: |
         git config --local user.email "actions@github.com"
         git config --local user.name "GitHub Action"
-        
+
+        # 添加这两个文件（JSON 和同名的 TXT）
         git add bird-shield-blocking/share/blacklist/
-        
+
         if ! git diff --staged --quiet; then
-          git commit -m "Update blacklist data - $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          git commit -m "🔄 更新黑名单数据 - $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           git push origin ${{ github.ref_name }}
+          echo "✅ 数据已推送至仓库"
+        else
+          echo "ℹ️ 没有新的数据需要提交"
         fi
