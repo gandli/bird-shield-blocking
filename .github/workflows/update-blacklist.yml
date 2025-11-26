@@ -2,7 +2,7 @@ name: Update Blacklist Data
 
 on:
   schedule:
-    - cron: "0 0 * * *"   # UTC 0 点（北京时间 08:00）
+    - cron: "0 0 * * *"
   workflow_dispatch:
 
 jobs:
@@ -21,49 +21,42 @@ jobs:
     - name: Create target directory
       run: mkdir -p bird-shield-blocking/share/blacklist
 
-    - name: Fetch JSON & extract IDs using real filename
+    - name: Fetch latest JSON from Archive.org
       run: |
-        SOURCE_URL="https://basedinchina.com/api/users/all"
+        BASE_URL="https://archive.org/download/based-in-china"
 
-        echo "🔗 请求数据源: $SOURCE_URL"
+        echo "🔍 正在查询最新 JSON 文件……"
 
-        # --------------- 加强的 curl，请求更容易成功 ----------------
-        RESPONSE=$(curl -s -L \
-          --retry 5 --retry-delay 3 \
-          -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0" \
-          -H "Accept: application/json,text/html,*/*" \
-          -H "Referer: https://basedinchina.com/" \
-          -w "HTTP_STATUS:%{http_code}\nFINAL_URL:%{url_effective}" \
-          -o temp.json \
-          "$SOURCE_URL")
+        # 自动列目录，提取所有 json 文件名，排序后取最后一个（最新）
+        LATEST_FILE=$(curl -s "$BASE_URL/" \
+          | grep -o 'based-in-china-accounts-export-full-[^"]*\.json' \
+          | sort | tail -n 1)
 
-
-        HTTP_STATUS=$(echo "$RESPONSE" | sed -n 's/.*HTTP_STATUS:\([0-9]*\).*/\1/p')
-        FINAL_URL=$(echo "$RESPONSE" | sed -n 's/.*FINAL_URL:\(.*\)/\1/p')
-
-        echo "📍 最终地址: $FINAL_URL"
-        echo "📡 HTTP 状态码: $HTTP_STATUS"
-
-        # --------------- 错误处理 ----------------
-        if [ "$HTTP_STATUS" != "200" ]; then
-          echo "❌ 失败：API 返回状态码 $HTTP_STATUS"
+        if [ -z "$LATEST_FILE" ]; then
+          echo "❌ 错误：未找到 JSON 文件"
           exit 1
         fi
+
+        echo "📄 最新 JSON 文件: $LATEST_FILE"
+
+        FILE_URL="$BASE_URL/$LATEST_FILE"
+
+        echo "⬇️ 正在下载: $FILE_URL"
+
+        curl -s -L -o temp.json "$FILE_URL"
 
         if [ ! -s temp.json ]; then
-          echo "❌ 失败：下载到的 JSON 文件为空"
+          echo "❌ JSON 下载失败（空文件）"
           exit 1
         fi
 
-        # --------------- 提取真实文件名 ----------------
-        REAL_FILENAME=$(basename "$FINAL_URL")
-        TARGET_JSON="bird-shield-blocking/share/blacklist/$REAL_FILENAME"
-
+        TARGET_JSON="bird-shield-blocking/share/blacklist/$LATEST_FILE"
         mv temp.json "$TARGET_JSON"
+
         echo "💾 JSON 保存为: $TARGET_JSON"
 
-        # --------------- 生成 .txt 文件 ----------------
-        TXT_FILENAME="${REAL_FILENAME%.*}.txt"
+        # ---------------- 生成 txt ----------------
+        TXT_FILENAME="${LATEST_FILE%.*}.txt"
         TARGET_TXT="bird-shield-blocking/share/blacklist/$TXT_FILENAME"
 
         jq -r '.users[].id' "$TARGET_JSON" > "$TARGET_TXT"
