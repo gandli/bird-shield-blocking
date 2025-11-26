@@ -1,10 +1,9 @@
-name: Update Blacklist Data (Real Filename for Both JSON and IDs)
+name: Update Blacklist Data
 
 on:
   schedule:
-    # 每天 UTC 00:00 运行（北京时间 08:00）
-    - cron: '0 0 * * *'
-  workflow_dispatch:  # 支持手动触发
+    - cron: "0 0 * * *"   # UTC 0 点（北京时间 08:00）
+  workflow_dispatch:
 
 jobs:
   update-blacklist:
@@ -13,8 +12,6 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Install dependencies
       run: |
@@ -22,59 +19,65 @@ jobs:
         sudo apt-get install -y jq
 
     - name: Create target directory
-      run: |
-        mkdir -p bird-shield-blocking/share/blacklist
+      run: mkdir -p bird-shield-blocking/share/blacklist
 
     - name: Fetch JSON & extract IDs using real filename
       run: |
-        # 🔗 数据源 URL（会重定向到真实 JSON 文件）
         SOURCE_URL="https://basedinchina.com/api/users/all"
 
-        echo "🔗 正在请求数据源: $SOURCE_URL"
+        echo "🔗 请求数据源: $SOURCE_URL"
 
-        # 使用 curl 跟随重定向，同时获取最终 URL
-        RESPONSE=$(curl -s -L -w "HTTP_STATUS:%{http_code}\nFINAL_URL:%{url_effective}" -o temp.json "$SOURCE_URL")
+        # --------------- 加强的 curl，请求更容易成功 ----------------
+        RESPONSE=$(curl -s -L \
+          --retry 3 --retry-delay 2 \
+          -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+          -H "Referer: https://basedinchina.com/" \
+          -w "HTTP_STATUS:%{http_code}\nFINAL_URL:%{url_effective}" \
+          -o temp.json \
+          "$SOURCE_URL")
 
-        # 提取 HTTP 状态码 和 最终 URL
         HTTP_STATUS=$(echo "$RESPONSE" | sed -n 's/.*HTTP_STATUS:\([0-9]*\).*/\1/p')
         FINAL_URL=$(echo "$RESPONSE" | sed -n 's/.*FINAL_URL:\(.*\)/\1/p')
 
-        echo "✅ 最终状态码: $HTTP_STATUS"
-        echo "📍 最终下载地址: $FINAL_URL"
+        echo "📍 最终地址: $FINAL_URL"
+        echo "📡 HTTP 状态码: $HTTP_STATUS"
 
+        # --------------- 错误处理 ----------------
         if [ "$HTTP_STATUS" != "200" ]; then
-          echo "❌ 请求失败，HTTP 状态码: $HTTP_STATUS"
+          echo "❌ 失败：API 返回状态码 $HTTP_STATUS"
           exit 1
         fi
 
-        # 从最终 URL 中提取文件名（如 based-in-china-...2025-11-24T12-58-31-024Z.json）
+        if [ ! -s temp.json ]; then
+          echo "❌ 失败：下载到的 JSON 文件为空"
+          exit 1
+        fi
+
+        # --------------- 提取真实文件名 ----------------
         REAL_FILENAME=$(basename "$FINAL_URL")
-        echo "📦 提取到的真实文件名: $REAL_FILENAME"
+        TARGET_JSON="bird-shield-blocking/share/blacklist/$REAL_FILENAME"
 
-        # 保存原始 JSON，使用真实文件名
-        TARGET_JSON_PATH="bird-shield-blocking/share/blacklist/$REAL_FILENAME"
-        mv temp.json "$TARGET_JSON_PATH"
-        echo "💾 原始 JSON 已保存为: $TARGET_JSON_PATH"
+        mv temp.json "$TARGET_JSON"
+        echo "💾 JSON 保存为: $TARGET_JSON"
 
-        # 提取所有用户的 id，并保存为同名但扩展名为 .txt 的文件
-        TXT_FILENAME="${REAL_FILENAME%.*}.txt"  # 把 .json 替换为 .txt
-        TARGET_TXT_PATH="bird-shield-blocking/share/blacklist/$TXT_FILENAME"
+        # --------------- 生成 .txt 文件 ----------------
+        TXT_FILENAME="${REAL_FILENAME%.*}.txt"
+        TARGET_TXT="bird-shield-blocking/share/blacklist/$TXT_FILENAME"
 
-        jq -r '.users[].id' "$TARGET_JSON_PATH" > "$TARGET_TXT_PATH"
-        echo "💾 用户 IDs 已提取到: $TARGET_TXT_PATH （每行一个 id）"
+        jq -r '.users[].id' "$TARGET_JSON" > "$TARGET_TXT"
+        echo "💾 用户 ID 保存到: $TARGET_TXT"
 
-    - name: Commit and push
+    - name: Commit and push changes
       run: |
         git config --local user.email "actions@github.com"
-        git config --local user.name "GitHub Action"
+        git config --local user.name  "GitHub Action"
 
-        # 添加这两个文件（JSON 和同名的 TXT）
         git add bird-shield-blocking/share/blacklist/
 
-        if ! git diff --staged --quiet; then
-          git commit -m "🔄 更新黑名单数据 - $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-          git push origin ${{ github.ref_name }}
-          echo "✅ 数据已推送至仓库"
+        if git diff --staged --quiet; then
+          echo "ℹ️ 没有变化需要提交"
         else
-          echo "ℹ️ 没有新的数据需要提交"
+          git commit -m "🔄 更新黑名单数据 - $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          git push
+          echo "✅ 数据已更新并推送"
         fi
