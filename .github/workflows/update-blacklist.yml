@@ -29,12 +29,14 @@ jobs:
 
         # --------------- 加强的 curl，请求更容易成功 ----------------
         RESPONSE=$(curl -s -L \
-          --retry 3 --retry-delay 2 \
-          -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)" \
+          --retry 5 --retry-delay 3 \
+          -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0" \
+          -H "Accept: application/json,text/html,*/*" \
           -H "Referer: https://basedinchina.com/" \
           -w "HTTP_STATUS:%{http_code}\nFINAL_URL:%{url_effective}" \
           -o temp.json \
           "$SOURCE_URL")
+
 
         HTTP_STATUS=$(echo "$RESPONSE" | sed -n 's/.*HTTP_STATUS:\([0-9]*\).*/\1/p')
         FINAL_URL=$(echo "$RESPONSE" | sed -n 's/.*FINAL_URL:\(.*\)/\1/p')
