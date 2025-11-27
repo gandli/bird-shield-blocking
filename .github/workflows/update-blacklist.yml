@@ -21,13 +21,15 @@ jobs:
     - name: Create target directory
       run: mkdir -p bird-shield-blocking/share/blacklist
 
+    # -------------------------
+    # ① 下载最新 Archive.org JSON
+    # -------------------------
     - name: Fetch latest JSON from Archive.org
       run: |
         BASE_URL="https://archive.org/download/based-in-china"
 
         echo "🔍 正在查询最新 JSON 文件……"
 
-        # 自动列目录，提取所有 json 文件名，排序后取最后一个（最新）
         LATEST_FILE=$(curl -s "$BASE_URL/" \
           | grep -o 'based-in-china-accounts-export-full-[^"]*\.json' \
           | sort | tail -n 1)
@@ -42,31 +44,57 @@ jobs:
         FILE_URL="$BASE_URL/$LATEST_FILE"
 
         echo "⬇️ 正在下载: $FILE_URL"
+        curl -s -L -o temp_archive.json "$FILE_URL"
 
-        curl -s -L -o temp.json "$FILE_URL"
-
-        if [ ! -s temp.json ]; then
+        if [ ! -s temp_archive.json ]; then
           echo "❌ JSON 下载失败（空文件）"
           exit 1
         fi
 
         TARGET_JSON="bird-shield-blocking/share/blacklist/$LATEST_FILE"
-        mv temp.json "$TARGET_JSON"
+        mv temp_archive.json "$TARGET_JSON"
 
-        echo "💾 JSON 保存为: $TARGET_JSON"
+        echo "💾 Archive.org JSON 保存为: $TARGET_JSON"
 
-        # ---------------- 生成 txt ----------------
-        TXT_FILENAME="${LATEST_FILE%.*}.txt"
-        TARGET_TXT="bird-shield-blocking/share/blacklist/$TXT_FILENAME"
+        # 生成对应 txt
+        TXT1="bird-shield-blocking/share/blacklist/${LATEST_FILE%.*}.txt"
+        jq -r '.users[].id' "$TARGET_JSON" > "$TXT1"
+        echo "💾 从 Archive.org 提取 ID 到: $TXT1"
 
-        jq -r '.users[].id' "$TARGET_JSON" > "$TARGET_TXT"
-        echo "💾 用户 ID 保存到: $TARGET_TXT"
+    # -------------------------------
+    # ② 下载第二数据源：china.jsonl
+    # -------------------------------
+    - name: Fetch china.jsonl and generate china.txt
+      run: |
+        SRC2_URL="https://raw.githubusercontent.com/pluto0x0/X_based_china/refs/heads/main/china.jsonl"
+        echo "⬇️ 正在下载 china.jsonl: $SRC2_URL"
 
+        curl -s -L -o china.jsonl "$SRC2_URL"
+
+        if [ ! -s china.jsonl ]; then
+          echo "❌ 下载 china.jsonl 失败"
+          exit 1
+        fi
+
+        TARGET_JSONL="bird-shield-blocking/share/blacklist/china.jsonl"
+        mv china.jsonl "$TARGET_JSONL"
+        echo "💾 china.jsonl 已保存为: $TARGET_JSONL"
+
+        # 提取 ID → china.txt
+        TARGET_TXT="bird-shield-blocking/share/blacklist/china.txt"
+        jq -r '.info.rest_id' "$TARGET_JSONL" > "$TARGET_TXT"
+
+        echo "💾 从 china.jsonl 提取 ID 到: $TARGET_TXT"
+
+    # -------------------------------
+    # ③ 提交
+    # -------------------------------
     - name: Commit and push changes
       run: |
         git config --local user.email "actions@github.com"
         git config --local user.name  "GitHub Action"
 
+        git add bird-shield-in-blocking/share/blacklist/ 2>/dev/null || true
         git add bird-shield-blocking/share/blacklist/
 
         if git diff --staged --quiet; then
